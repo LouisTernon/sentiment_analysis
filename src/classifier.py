@@ -5,6 +5,8 @@ from torch.utils.data import TensorDataset, DataLoader
 
 import numpy as np
 
+import spacy
+
 from collections import Counter
 import re
 import os 
@@ -14,13 +16,33 @@ torch.manual_seed(1)
 
 class SentencePreprocessor:
 
-    def __init__(self):
-        pass
+    def __init__(self, spacy_nlp=None, lemmatize=False, min_letter=2):
+        """
+        """
+        self.spacy_nlp = spacy_nlp
+        self.lemmatize = lemmatize
+        self.min_letter = min_letter
 
-    def process(self, s):
-        s_ = self.replace_ponctuation(s)
-        s_ = self.lower(s)
+
+    def process(self, s:str, pretrained_embedding:bool):
+        """
+        Main function of the class: takes as a sentence, and iteratively perform all the preprocessing
+        Return a string, or an array of shape (n_words, n_emb) if pretrained_embedding=True
+        """
+        if self.lemmatize:
+            s_ = self.clean(s)
+        else:
+            s_ = self.replace_ponctuation(s)
+            s_ = self.lower(s_)
+        if self.min_letter: s_ = self.filter_min_letter(s_, self.min_letter)
+        if pretrained_embedding: s_ = self.embed(s_)
         return s_
+
+
+    @staticmethod
+    def filter_min_letter(s, min_letter):
+        filtered = " ".join(list(filter(lambda w: len(w)>=min_letter,  s.split(" "))))
+        return filtered
 
     @staticmethod
     def replace_ponctuation(s):
@@ -32,7 +54,28 @@ class SentencePreprocessor:
         s_ = s.lower()
         return s_
 
+    def clean(self, s):
+        """
+        filter, lower and lemmatize words
+        :param s (str): single sentence 
+        :param spacy_nlp: spacy model
+        :return: a list of lists of words
+        """
+        string = re.sub('[^a-zA-Z ]+', " ", s.lower())
+        spacy_tokens = self.spacy_nlp(string)
+        res = [token.lemma_ for token in spacy_tokens if token.lemma_ != '-PRON-' and token.lemma_.strip()]
+        cleaned_s = " ".join(res)
+        return cleaned_s
 
+    def embed(self, s:str) -> np.array:
+        """
+        Embedd a single sentence using spacy_nlp embedder
+        :param s: str, single sentence
+        :return: array (len(s), 300)
+        """
+        spacy_tokens = self.spacy_nlp(s)
+        embedded = np.array([token.vector for token in spacy_tokens if token.has_vector])
+        return embedded
 
 class Dataset:
 
@@ -89,14 +132,14 @@ class Dataset:
 
     def compute_vocab_stat(self, processor):
         assert self.s, 'Load first'
-        words = [w.strip() for s in self.s for w in processor.process(s).split(" ")]
+        words = [w.strip() for s in self.s for w in processor.process(s, pretrained_embedding=False).split(" ")]
         self.words_count = Counter(words)
         self.vocab_size = len(self.words_count)
 
     def create_word_to_id(self, sentenceprocessor):
         word_to_id = {}
         for s in self.s:
-            for word in sentenceprocessor.process(s).split(" "):
+            for word in sentenceprocessor.process(s, pretrained_embedding=False).split(" "):
                 if word not in word_to_id:
                     word_to_id[word] = len(word_to_id)
         self.word_to_id = word_to_id
@@ -108,17 +151,21 @@ class Dataset:
         return torch.tensor(idxs, dtype=torch.int64)
 
     @staticmethod
-    def padd_seq(s, max_length):
-        padded = np.zeros((max_length,))
-        padded[-len(s):] = np.array(s)[:max_length]
+    def padd_seq(s, max_length): 
+        if isinstance(s, np.ndarray) and s.ndim == 2: # embedding
+            padded = np.zeros((max_length, s.shape[1]))
+            padded[-len(s):, :] = s[:max_length, :]
+        else: #label encoder
+            padded = np.zeros((max_length,))
+            padded[-len(s):] = np.array(s)[:max_length]
         return padded
 
-    def preprocess_sentences(self, sentenceprocessor, max_length=20):
+    def preprocess_sentences(self, sentenceprocessor, pretrained_embedding, max_length=20):
         assert self.s, "Load first"
         # Preprocess
-        self.s_processed = [sentenceprocessor.process(s) for s in self.s]
+        self.s_processed = [sentenceprocessor.process(s, pretrained_embedding) for s in self.s]
         # Replace words by indexes
-        self.s_processed = [self.seq_to_id_list(s) for s in self.s_processed]
+        if not pretrained_embedding: self.s_processed = [self.seq_to_id_list(s) for s in self.s_processed]
         # Padd
         self.s_processed = np.array([self.padd_seq(s, max_length) for s in self.s_processed])
         
@@ -137,9 +184,9 @@ class Dataset:
 
 class SentenceEncoder(nn.Module):
     
-    def __init__(self, n_emb, n_hidden, n_layers, vocab_size, tagset_size, dropout=0, bias=True):
+    def __init__(self, n_emb, n_hidden, n_layers, vocab_size, tagset_size, pretrained_embedding, dropout=0, bias=True):
         super(SentenceEncoder, self).__init__()
-        self.word_embeddings = nn.Embedding(vocab_size, n_emb)
+        if not pretrained_embedding: self.word_embeddings = nn.Embedding(vocab_size, n_emb)
         self.dropout = nn.Dropout(dropout)
         self.lstm = nn.LSTM(n_emb, n_hidden, n_layers, bias=bias, dropout=dropout, batch_first=True)
         self.dense = nn.Linear(n_hidden, tagset_size)
@@ -148,11 +195,14 @@ class SentenceEncoder(nn.Module):
         self.n_emb = n_emb
         self.n_hidden = n_hidden
         self.n_layers = n_layers
-
+        self.pretrained_embedding = pretrained_embedding
 
     def forward(self, input_, hidden):
-        input_ = input_.long()
-        embeds = self.word_embeddings(input_)
+        if not self.pretrained_embedding: 
+            input_ = input_.long()
+            embeds = self.word_embeddings(input_)
+        else :
+            embeds = input_
         out, hidden = self.lstm(embeds, hidden)
         out = out[:, -1, :] # Get final hidden state
         
@@ -173,27 +223,34 @@ class Classifier:
     """The Classifier"""
 
     #############################################
-    def train(self, trainfile, n_epochs=20, batch_size=32, clip=0, verbose=0):
+    def train(self, trainfile,  n_epochs=20, batch_size=32, encoder_args=None, pretrained_embedding=False, lemmatize=False, clip=0, verbose=0):
         """Trains the classifier model on the training set stored in file trainfile"""
+
+        if verbose: print("   Loading data..")
         dataset = Dataset()
         dataset.load_encode(trainfile)
 
-        sentence_processor = SentencePreprocessor()
+        if verbose: print("   Preprocessing..")
+        spacy_nlp = spacy.load("en_core_web_md") if (lemmatize or pretrained_embedding) else None
+        sentence_processor = SentencePreprocessor(spacy_nlp=spacy_nlp, lemmatize=lemmatize)
         dataset.compute_vocab_stat(sentence_processor) # TODO : compute stat after preprocessing to reduce redundancy
         dataset.create_word_to_id(sentence_processor)
-        train_sentences = dataset.preprocess_sentences(sentence_processor)
+        train_sentences = dataset.preprocess_sentences(sentence_processor, pretrained_embedding=pretrained_embedding)
         
         train_data = TensorDataset(torch.from_numpy(train_sentences), torch.from_numpy(dataset.l))
         train_loader = DataLoader(train_data, shuffle=True, batch_size=batch_size, drop_last=True)
 
+        if verbose: print("   Training..")
         device = torch.device("gpu") if torch.cuda.is_available() else torch.device("cpu")
-
-        self.model = SentenceEncoder(150, 64, 1, dataset.vocab_size+1, 3)
+        encoder_args = {"n_hidden":64, "n_layers":1, "tagset_size":3}
+        encoder_args["n_emb"] = 150 if not pretrained_embedding else 300
+        self.model = SentenceEncoder(vocab_size=dataset.vocab_size+1, pretrained_embedding=pretrained_embedding, **encoder_args)
         loss_function = nn.CrossEntropyLoss()
         optimizer = optim.Adam(self.model.parameters(), lr=5e-2)
 
         start_time = time()
         self.model.train()
+        self.model.float()
         for epoch in range(n_epochs):  
             e_loss = 0
             h = self.model.init_hidden(batch_size)
@@ -204,7 +261,10 @@ class Classifier:
                 s, l = s.to(device), l.to(device)
                 h = tuple([e.data for e in h])
                 
-                output, h = self.model(s, h)
+                try:
+                    output, h = self.model(s.float(), h)
+                except:
+                    pass
 
                 loss = loss_function(output.squeeze(), l.long())
                 loss.backward()
@@ -213,19 +273,20 @@ class Classifier:
 
                 e_loss += loss.item()
 
-            if verbose: print("Epoch : {}/{} | Loss : {:.3f} | Eta : {:.2f}s".format(epoch, n_epochs, e_loss/dataset.len, (n_epochs-epoch+1)*(time()-start_time)/(epoch+1)))
+            if verbose: print("         Epoch : {}/{} | Loss : {:.3f} | Eta : {:.2f}s".format(epoch, n_epochs, e_loss/dataset.len, (n_epochs-epoch+1)*(time()-start_time)/(epoch+1)))
 
-    def predict(self, datafile):
+    def predict(self, datafile, pretrained_embedding=False, lemmatize=False):
         """Predicts class labels for the input instances in file 'datafile'
         Returns the list of predicted labels
         """
         dataset = Dataset()
         dataset.load_encode(datafile)
 
-        sentence_processor = SentencePreprocessor()
+        spacy_nlp = spacy.load("en_core_web_md") if (lemmatize or pretrained_embedding) else None
+        sentence_processor = SentencePreprocessor(spacy_nlp=spacy_nlp, lemmatize=lemmatize)
         dataset.compute_vocab_stat(sentence_processor) # TODO : compute stat after preprocessing to reduce redundancy
         dataset.create_word_to_id(sentence_processor)
-        test_sentences = dataset.preprocess_sentences(sentence_processor)
+        test_sentences = dataset.preprocess_sentences(sentence_processor, pretrained_embedding)
         
         test_data = TensorDataset(torch.from_numpy(test_sentences), torch.from_numpy(dataset.l))
         batch_size = len(test_data)
@@ -238,7 +299,7 @@ class Classifier:
         for s, l in test_loader:
             h = tuple([e.data for e in h])
             s, l = s.to(device), l.to(device)
-            pred_logits, _ = self.model(s, h)
+            pred_logits, _ = self.model(s.float(), h)
             pred_labels = torch.argmax(pred_logits, dim=1)
             
         pred_labels = pred_labels.numpy()
@@ -251,7 +312,6 @@ if __name__ == "__main__":
     import os
     data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data", "traindata.csv")
   
-
     # dataset = Dataset()
     # dataset.load_encode(data_path)
 
@@ -259,8 +319,6 @@ if __name__ == "__main__":
     # dataset.compute_vocab_stat(sentence_processor)
     # dataset.create_word_to_id(sentence_processor)
     # train_sentences = dataset.preprocess_sentences(sentence_processor)
-
-    
 
     classifier = Classifier()
     classifier.train(data_path, n_epochs=200, verbose=1)

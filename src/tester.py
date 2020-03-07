@@ -42,10 +42,10 @@ def eval_list(glabels, slabels):
 def train_and_eval(classifier, trainfile, devfile, testfile, run_id):
     print(f"\nRUN: {run_id}")
     print("  %s.1. Training the classifier..." % str(run_id))
-    classifier.train(trainfile, verbose=1)
+    classifier.train(trainfile, verbose=1, lemmatize=False)#, pretrained_embedding=True)
     print()
     print("  %s.2. Eval on the dev set..." % str(run_id), end="")
-    slabels = classifier.predict(devfile)
+    slabels = classifier.predict(devfile, lemmatize=False)#, pretrained_embedding=True)
     glabels = load_label_output(devfile)
     devacc = eval_list(glabels, slabels)
     print(" Acc.: %.2f" % devacc)
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     print("Test accs:", testaccs)
     print()
     print("Mean Dev Acc.: %.2f (%.2f)" % (np.mean(devaccs), np.std(devaccs)))
-    print("Mean Test Acc.: %.2f (%.2f)" % (np.mean(testaccs), np.std(testaccs)))
+    print("Mean Test Acc.: %.2f (%.2f)" % (np.mean(testaccs), np.std(testaccs)))    
     print("\nExec time: %.2f s. ( %d per run )" % (total_exec_time, total_exec_time / n_runs))
 
 
