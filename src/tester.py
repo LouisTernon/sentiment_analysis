@@ -4,6 +4,9 @@ import numpy as np
 from classifier import Classifier
 
 
+# To remove:
+import os
+
 def set_reproducible():
     # The below is necessary to have reproducible behavior.
     import random as rn
@@ -23,7 +26,6 @@ def load_label_output(filename):
         return [line.strip().split("\t")[0] for line in f if line.strip()]
 
 
-
 def eval_list(glabels, slabels):
     if (len(glabels) != len(slabels)):
         print("\nWARNING: label count in system output (%d) is different from gold label count (%d)\n" % (
@@ -40,7 +42,7 @@ def eval_list(glabels, slabels):
 def train_and_eval(classifier, trainfile, devfile, testfile, run_id):
     print(f"\nRUN: {run_id}")
     print("  %s.1. Training the classifier..." % str(run_id))
-    classifier.train(trainfile)
+    classifier.train(trainfile, verbose=1)
     print()
     print("  %s.2. Eval on the dev set..." % str(run_id), end="")
     slabels = classifier.predict(devfile)
@@ -67,6 +69,8 @@ if __name__ == "__main__":
     datadir = "../data/"
     trainfile =  datadir + "traindata.csv"
     devfile =  datadir + "devdata.csv"
+    trainfile = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data", "traindata.csv")
+    devfile = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data", "devdata.csv")
     testfile = None
     # testfile = datadir + "testdata.csv"
 
