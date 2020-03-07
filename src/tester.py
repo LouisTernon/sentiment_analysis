@@ -42,10 +42,10 @@ def eval_list(glabels, slabels):
 def train_and_eval(classifier, trainfile, devfile, testfile, run_id):
     print(f"\nRUN: {run_id}")
     print("  %s.1. Training the classifier..." % str(run_id))
-    classifier.train(trainfile, verbose=1, lemmatize=False)#, pretrained_embedding=True)
+    classifier.train(trainfile, verbose=1, lemmatize=True, pretrained_embedding=True)
     print()
     print("  %s.2. Eval on the dev set..." % str(run_id), end="")
-    slabels = classifier.predict(devfile, lemmatize=False)#, pretrained_embedding=True)
+    slabels = classifier.predict(devfile, lemmatize=True, pretrained_embedding=True)
     glabels = load_label_output(devfile)
     devacc = eval_list(glabels, slabels)
     print(" Acc.: %.2f" % devacc)

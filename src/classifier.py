@@ -171,25 +171,26 @@ class Dataset:
         
         return self.s_processed
 
-    def label_to_oh(self) -> np.array:
-
+    @staticmethod
+    def label_to_oh(labels) -> np.array:
+        n_labels = len(set(labels))
         def oh(el):
-            oh = np.array([0]*self.n_labels)
+            oh = np.array([0]*n_labels)
             oh[el] = 1
             return oh
 
-        labels_oh = np.array(list(map(oh, self.l)))
+        labels_oh = np.array(list(map(oh, labels)))
         return labels_oh
 
 
 class SentenceEncoder(nn.Module):
     
-    def __init__(self, n_emb, n_hidden, n_layers, vocab_size, tagset_size, pretrained_embedding, dropout=0, bias=True):
+    def __init__(self, n_emb, n_hidden, n_layers, vocab_size, tagset_size, category_size, pretrained_embedding, dropout=0, bias=True):
         super(SentenceEncoder, self).__init__()
         if not pretrained_embedding: self.word_embeddings = nn.Embedding(vocab_size, n_emb)
         self.dropout = nn.Dropout(dropout)
         self.lstm = nn.LSTM(n_emb, n_hidden, n_layers, bias=bias, dropout=dropout, batch_first=True)
-        self.dense = nn.Linear(n_hidden, tagset_size)
+        self.dense = nn.Linear(n_hidden + category_size, tagset_size)
         self.activation = nn.Sigmoid()
 
         self.n_emb = n_emb
@@ -197,7 +198,7 @@ class SentenceEncoder(nn.Module):
         self.n_layers = n_layers
         self.pretrained_embedding = pretrained_embedding
 
-    def forward(self, input_, hidden):
+    def forward(self, input_, categories, hidden):
         if not self.pretrained_embedding: 
             input_ = input_.long()
             embeds = self.word_embeddings(input_)
@@ -205,8 +206,8 @@ class SentenceEncoder(nn.Module):
             embeds = input_
         out, hidden = self.lstm(embeds, hidden)
         out = out[:, -1, :] # Get final hidden state
-        
         out = self.dropout(out)
+        if categories is not None: out = torch.cat((out, categories), 1)
         out = self.dense(out)
         out = self.activation(out)
         return out, hidden 
@@ -237,16 +238,17 @@ class Classifier:
         dataset.create_word_to_id(sentence_processor)
         train_sentences = dataset.preprocess_sentences(sentence_processor, pretrained_embedding=pretrained_embedding)
         
-        train_data = TensorDataset(torch.from_numpy(train_sentences), torch.from_numpy(dataset.l))
+        category_oh = dataset.label_to_oh(dataset.c)
+        train_data = TensorDataset(torch.from_numpy(train_sentences), torch.from_numpy(category_oh), torch.from_numpy(dataset.l))
         train_loader = DataLoader(train_data, shuffle=True, batch_size=batch_size, drop_last=True)
 
         if verbose: print("   Training..")
         device = torch.device("gpu") if torch.cuda.is_available() else torch.device("cpu")
-        encoder_args = {"n_hidden":64, "n_layers":1, "tagset_size":3}
+        encoder_args = {"n_hidden":128, "n_layers":1, "tagset_size":3}
         encoder_args["n_emb"] = 150 if not pretrained_embedding else 300
-        self.model = SentenceEncoder(vocab_size=dataset.vocab_size+1, pretrained_embedding=pretrained_embedding, **encoder_args)
+        self.model = SentenceEncoder(vocab_size=dataset.vocab_size+1, pretrained_embedding=pretrained_embedding, category_size=len(dataset.c_mapping), **encoder_args)
         loss_function = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=5e-2)
+        optimizer = optim.Adam(self.model.parameters(), lr=5e-3)
 
         start_time = time()
         self.model.train()
@@ -255,16 +257,14 @@ class Classifier:
             e_loss = 0
             h = self.model.init_hidden(batch_size)
 
-            for s, l in train_loader:
+            for s, c, l in train_loader:
 
                 self.model.zero_grad()
-                s, l = s.to(device), l.to(device)
+                s, c, l = s.to(device), c.to(device), l.to(device)
                 h = tuple([e.data for e in h])
                 
-                try:
-                    output, h = self.model(s.float(), h)
-                except:
-                    pass
+                output, h = self.model(s.float(), c.float(), h)
+
 
                 loss = loss_function(output.squeeze(), l.long())
                 loss.backward()
@@ -288,7 +288,8 @@ class Classifier:
         dataset.create_word_to_id(sentence_processor)
         test_sentences = dataset.preprocess_sentences(sentence_processor, pretrained_embedding)
         
-        test_data = TensorDataset(torch.from_numpy(test_sentences), torch.from_numpy(dataset.l))
+        category_oh = dataset.label_to_oh(dataset.c)
+        test_data = TensorDataset(torch.from_numpy(test_sentences), torch.from_numpy(category_oh), torch.from_numpy(dataset.l))
         batch_size = len(test_data)
         test_loader = DataLoader(test_data, shuffle=False, batch_size=batch_size)
 
@@ -296,10 +297,10 @@ class Classifier:
         
         h = self.model.init_hidden(batch_size)
         self.model.eval()
-        for s, l in test_loader:
+        for s, c, l in test_loader:
             h = tuple([e.data for e in h])
-            s, l = s.to(device), l.to(device)
-            pred_logits, _ = self.model(s.float(), h)
+            s, c, l = s.to(device), c.to(device), l.to(device)
+            pred_logits, _ = self.model(s.float(), c.float(), h)
             pred_labels = torch.argmax(pred_logits, dim=1)
             
         pred_labels = pred_labels.numpy()
