@@ -3,8 +3,27 @@
 ```
 pip install -r requirement.txt
 python -m spacy download en_core_web_md
-python src/tester.py
+cd src
+python tester.py
 ```
+
+# Pipeline :
+
+- `dataset: Dataset` :
+    - `load` / `load_encode`: load dataset
+    - `compute_vocab_stat` / `create_word_to_id`: vocabulary utils
+    - `preprocess_sentences` : main preprocessing function. Takes a sentence processor as argument, potentially embeddings, return the processed sentences.
+
+- `preprocessor: SentenceProcessor` :
+    - `process` : main processing function
+
+- `model: Any` : Any encoding model. 
+
+- `classifier: Classifier` : Full pipeline. 
+
+- `tester`: leave unchanged.
+
+- `tester_debug`: copy of tester. Used to debug and run experiments
 
 # Results
 

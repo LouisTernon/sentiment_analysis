@@ -3,6 +3,8 @@ import numpy as np
 
 from classifier import Classifier
 
+# To remove:
+import os
 
 def set_reproducible():
     # The below is necessary to have reproducible behavior.
@@ -23,7 +25,6 @@ def load_label_output(filename):
         return [line.strip().split("\t")[0] for line in f if line.strip()]
 
 
-
 def eval_list(glabels, slabels):
     if (len(glabels) != len(slabels)):
         print("\nWARNING: label count in system output (%d) is different from gold label count (%d)\n" % (
@@ -40,13 +41,14 @@ def eval_list(glabels, slabels):
 def train_and_eval(classifier, trainfile, devfile, testfile, run_id):
     print(f"\nRUN: {run_id}")
     print("  %s.1. Training the classifier..." % str(run_id))
-    classifier.train(trainfile)
+    classifier.train(trainfile, verbose=1, lemmatize=True, pretrained_embedding=True)
     print()
     print("  %s.2. Eval on the dev set..." % str(run_id), end="")
-    slabels = classifier.predict(devfile)
+    slabels = classifier.predict(devfile, lemmatize=True, pretrained_embedding=True)
     glabels = load_label_output(devfile)
     devacc = eval_list(glabels, slabels)
     print(" Acc.: %.2f" % devacc)
+    errors = classifier.return_prediction_errors(devfile, lemmatize=True, pretrained_embedding=True)
     testacc = -1
     if testfile is not None:
         # Evaluation on the test data
@@ -67,6 +69,8 @@ if __name__ == "__main__":
     datadir = "../data/"
     trainfile =  datadir + "traindata.csv"
     devfile =  datadir + "devdata.csv"
+    trainfile = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data", "traindata.csv")
+    devfile = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data", "devdata.csv")
     testfile = None
     # testfile = datadir + "testdata.csv"
 
@@ -85,7 +89,7 @@ if __name__ == "__main__":
     print("Test accs:", testaccs)
     print()
     print("Mean Dev Acc.: %.2f (%.2f)" % (np.mean(devaccs), np.std(devaccs)))
-    print("Mean Test Acc.: %.2f (%.2f)" % (np.mean(testaccs), np.std(testaccs)))
+    print("Mean Test Acc.: %.2f (%.2f)" % (np.mean(testaccs), np.std(testaccs)))    
     print("\nExec time: %.2f s. ( %d per run )" % (total_exec_time, total_exec_time / n_runs))
 
 
